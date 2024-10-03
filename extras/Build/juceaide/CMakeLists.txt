@@ -98,8 +98,10 @@ else()
     endif()
 
     # Generator platform is only supported on specific generators
-    if(CMAKE_GENERATOR MATCHES "^Visual Studio.*$")
+    message(STATUS "CMAKE_GENERATOR: ${CMAKE_GENERATOR} and CMAKE_GENERATOR_PLATFORM: $ENV{CMAKE_GENERATOR_PLATFORM}")
+    if(CMAKE_GENERATOR MATCHES "^Visual Studio.*$")# AND NOT DEFINED ENV{CMAKE_GENERATOR_PLATFORM})
         set(ENV{CMAKE_GENERATOR_PLATFORM} "${CMAKE_HOST_SYSTEM_PROCESSOR}")
+        message(STATUS "Setting CMAKE_GENERATOR_PLATFORM to ${CMAKE_HOST_SYSTEM_PROCESSOR}")
     endif()
 
     # Looks like we're bootstrapping, reinvoke CMake
