@@ -217,10 +217,138 @@ function(_juce_module_sources module_path output_path built_sources other_source
     get_filename_component(module_parent_path ${module_path} DIRECTORY)
     get_filename_component(module_glob ${module_path} NAME)
 
-    file(GLOB_RECURSE all_module_files
-        CONFIGURE_DEPENDS LIST_DIRECTORIES FALSE
-        RELATIVE "${module_parent_path}"
-        "${module_path}/*")
+    # Read ignore patterns first
+    set(ignore_file "${module_path}/.jucemoduleignore")
+    set(ignore_patterns)
+    set(directory_ignore_patterns)
+    
+    if(EXISTS "${ignore_file}")
+        file(STRINGS "${ignore_file}" raw_ignore_patterns)
+        
+        foreach(pattern IN LISTS raw_ignore_patterns)
+            string(STRIP "${pattern}" pattern)
+            if(NOT pattern STREQUAL "" AND NOT pattern MATCHES "^#")
+                list(APPEND ignore_patterns "${pattern}")
+                
+                # Identify directory patterns (those that would match top-level directories)
+                # Remove trailing slashes and wildcards to get potential directory names
+                string(REGEX REPLACE "/$" "" clean_pattern "${pattern}")
+                string(REGEX REPLACE "/\\*$" "" clean_pattern "${clean_pattern}")
+                
+                # If pattern doesn't contain wildcards or path separators, it's likely a directory
+                if(NOT clean_pattern MATCHES "[*?/]")
+                    list(APPEND directory_ignore_patterns "${clean_pattern}")
+                endif()
+            endif()
+        endforeach()
+    endif()
+
+    # Get top-level entries in the module directory
+    file(GLOB top_level_entries LIST_DIRECTORIES TRUE "${module_path}/*")
+    
+    set(all_module_files)
+    
+    # Process each top-level entry
+    foreach(entry IN LISTS top_level_entries)
+        get_filename_component(entry_name "${entry}" NAME)
+        
+        # Check if this entry should be ignored
+        set(should_ignore FALSE)
+        foreach(ignore_dir IN LISTS directory_ignore_patterns)
+            if(entry_name STREQUAL ignore_dir)
+                set(should_ignore TRUE)
+                message(STATUS "Skipping directory from glob: ${entry_name}")
+                break()
+            endif()
+        endforeach()
+        
+        # If not ignored, glob recursively into this entry
+        if(NOT should_ignore)
+            if(IS_DIRECTORY "${entry}")
+                file(GLOB_RECURSE entry_files
+                    CONFIGURE_DEPENDS LIST_DIRECTORIES FALSE
+                    RELATIVE "${module_parent_path}"
+                    "${entry}/*")
+                list(APPEND all_module_files ${entry_files})
+            else()
+                # It's a file, add it directly
+                file(RELATIVE_PATH rel_file "${module_parent_path}" "${entry}")
+                list(APPEND all_module_files "${rel_file}")
+            endif()
+        endif()
+    endforeach()
+    
+    # Also include direct files in the module root
+    file(GLOB direct_files 
+    CONFIGURE_DEPENDS LIST_DIRECTORIES FALSE
+    RELATIVE "${module_parent_path}"
+    "${module_path}/*")
+    list(APPEND all_module_files ${direct_files})
+    
+    # Remove duplicates
+    list(REMOVE_DUPLICATES all_module_files)
+
+    # Apply additional regex-based filtering for patterns that couldn't be pre-filtered
+    if(ignore_patterns)
+        list(LENGTH all_module_files files_count_before)
+        message(STATUS "Processing .jucemoduleignore for module: ${module_glob}")
+        message(STATUS "Found ${files_count_before} files after pre-filtering")
+
+        # Process each ignore pattern with regex filtering
+        foreach(pattern IN LISTS ignore_patterns)
+            # Skip patterns we already handled with directory pre-filtering
+            string(REGEX REPLACE "/$" "" clean_pattern "${pattern}")
+            string(REGEX REPLACE "/\\*$" "" clean_pattern "${clean_pattern}")
+            
+            set(already_handled FALSE)
+            if(NOT clean_pattern MATCHES "[*?/]")
+                foreach(ignore_dir IN LISTS directory_ignore_patterns)
+                    if(clean_pattern STREQUAL ignore_dir)
+                        set(already_handled TRUE)
+                        break()
+                    endif()
+                endforeach()
+            endif()
+            
+            if(NOT already_handled)
+                message(STATUS "Processing ignore pattern: '${pattern}'")
+                
+                # Convert glob pattern to regex
+                string(REPLACE "*" ".*" pattern_regex "${pattern}")
+                string(REPLACE "?" "." pattern_regex "${pattern_regex}")
+                
+                # Handle directory patterns (with or without trailing slash)
+                set(dir_pattern_regex "${pattern_regex}")
+                string(REGEX REPLACE "/$" "" dir_pattern_regex "${dir_pattern_regex}")
+                
+                # Create patterns to match files under this module
+                set(full_pattern "^${module_glob}/${pattern_regex}$")
+                set(full_dir_pattern "^${module_glob}/${dir_pattern_regex}/.*")
+                
+                # Count files before filtering for this pattern
+                list(LENGTH all_module_files files_before)
+                
+                # Filter files matching the pattern exactly
+                list(FILTER all_module_files EXCLUDE REGEX "${full_pattern}")
+                
+                # Filter files under directories matching the pattern
+                list(FILTER all_module_files EXCLUDE REGEX "${full_dir_pattern}")
+                
+                # Also handle patterns without the module prefix (for backwards compatibility)
+                list(FILTER all_module_files EXCLUDE REGEX "^${pattern_regex}$")
+                list(FILTER all_module_files EXCLUDE REGEX "^${dir_pattern_regex}/.*")
+                
+                list(LENGTH all_module_files files_after)
+                math(EXPR files_removed "${files_before} - ${files_after}")
+                if(files_removed GREATER 0)
+                    message(STATUS "  Filtered out ${files_removed} files matching pattern '${pattern}'")
+                endif()
+            endif()
+        endforeach()
+        
+        list(LENGTH all_module_files files_count_after)
+        message(STATUS "Final file count after filtering: ${files_count_after}")
+    endif()
 
     set(base_path "${module_glob}/${module_glob}")
 
